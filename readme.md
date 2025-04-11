@@ -56,7 +56,7 @@ results = spp_solve(
 
 ## Proposed Enhancements
 
-To increase the functionality and accuracy of this module, consider the following improvements:
+To increase the functionality and accuracy of this module, we are considering the following improvements:
 
 | Enhancement                                      | Status       |
 |--------------------------------------------------|--------------|
@@ -104,12 +104,9 @@ To increase the functionality and accuracy of this module, consider the followin
 | Constellation | Supported | Notes                        |
 |---------------|-----------|------------------------------|
 | GPS           | Yes       | Fully supported              |
-| GLONASS       | No        | Planned                      |
-| Galileo       | No        | Planned                      |
-| BeiDou        | No        | Planned                      |
-| QZSS          | No        | Planned                      |
-| SBAS          | No        | Planned                      |
-| IRNSS         | No        | Planned                      |
+| GLONASS       | No        | Not Planned                  |
+| Galileo       | No        | Not Planned                  |
+| BeiDou        | No        | Not Planned                  |
 
 ## References
 
