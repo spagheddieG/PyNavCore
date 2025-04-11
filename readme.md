@@ -58,6 +58,18 @@ results = spp_solve(
 
 To increase the functionality and accuracy of this module, consider the following improvements:
 
+| Enhancement                                      | Status       |
+|--------------------------------------------------|--------------|
+| Multi-Constellation Support                      | Not Started  |
+| Advanced Error Modeling (iono/tropo, antenna PC) | Not Started  |
+| Robust Outlier Detection                         | Not Started  |
+| Improved Convergence and Initialization          | Not Started  |
+| Dilution of Precision (DOP) Calculation          | Not Started  |
+| Enhanced Output and Visualization                | Not Started  |
+| Real-Time/Streaming Capability                   | Not Started  |
+| Code Structure and Performance Improvements      | Not Started  |
+| Core SPP Functionality (GPS)                     | Complete     |
+
 ### 1. Multi-Constellation Support
 - Extend support to other GNSS constellations (GLONASS, Galileo, BeiDou) by handling their navigation message formats and coordinate systems.
 
@@ -87,11 +99,23 @@ To increase the functionality and accuracy of this module, consider the followin
 - Refactor for object-oriented design (e.g., a `SPPSolver` class).
 - Optimize performance for large datasets (e.g., vectorized operations, parallel processing).
 
+## GNSS Constellation Support
+
+| Constellation | Supported | Notes                        |
+|---------------|-----------|------------------------------|
+| GPS           | Yes       | Fully supported              |
+| GLONASS       | No        | Planned                      |
+| Galileo       | No        | Planned                      |
+| BeiDou        | No        | Planned                      |
+| QZSS          | No        | Planned                      |
+| SBAS          | No        | Planned                      |
+| IRNSS         | No        | Planned                      |
+
 ## References
 
 - GPS Interface Control Document ICD-GPS-200 (latest revision)
 - [georinex documentation](https://georinex.readthedocs.io/)
-- GNSS textbooks and open-source SPP implementations
+- GNSS textbooks
 
 ---
 
