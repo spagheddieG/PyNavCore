@@ -163,7 +163,8 @@ def spp_solve(
     convergence_threshold: float = 1e-4,
     max_iterations: int = 10,
     initial_xyz: Optional[List[float]] = None,
-    output_json: str = "spp_results.json"
+    output_json: str = "spp_results.json",
+    convergence_log_json: str = "spp_convergence_log.json"
 ) -> List[Dict[str, Any]]:
     """
     Modular SPP (Single Point Positioning) solver.
@@ -196,6 +197,7 @@ def spp_solve(
     # Set up logging for info messages
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+    from tqdm import tqdm
     # Load RINEX observation and navigation files (GPS only for obs)
     obs = gr.load(obs_file, use='G')
     nav = gr.load(nav_file)
@@ -218,11 +220,12 @@ def spp_solve(
         initial_xyz = [-1288392.5, -4865182.1, 3999769.7]
 
     results = []
+    convergence_log = []
     processed_epochs = 0
     # Get unique epoch times from observation file
     unique_times = np.unique(obs['time'].values)
 
-    for epoch_time_dt64 in unique_times:
+    for epoch_time_dt64 in tqdm(unique_times, desc="Epochs"):
         # Limit number of processed epochs if max_epochs is set
         if max_epochs is not None and processed_epochs >= max_epochs:
             break
@@ -294,15 +297,21 @@ def spp_solve(
         delta_x = None
 
         # Iterative least-squares solution for receiver position and clock offset
-        for _ in range(max_iterations):
+        epoch_convergence = []
+        sv_labels = [str(sv) for sv in valid_svs]
+        for iter_idx in tqdm(range(max_iterations), desc=f"Iterations (Epoch {processed_epochs+1})", leave=False):
             A = np.zeros((num_sats, 4))  # Design matrix
             omc = np.zeros(num_sats)     # Observed minus computed pseudoranges
+            geom_ranges = []
+            omc_dict = {}
+            geom_ranges_dict = {}
             for i in range(num_sats):
                 sat_pos_i = sat_positions[i]
                 pr_i = pseudoranges[i]
                 sat_clk_corr_i = sat_clock_corrections[i]
                 delta_pos = sat_pos_i - current_pos
                 geom_range = np.linalg.norm(delta_pos)
+                geom_ranges.append(geom_range)
                 # Correct pseudorange for satellite clock error
                 pr_corrected = pr_i + C * sat_clk_corr_i
                 omc[i] = pr_corrected - geom_range
@@ -311,6 +320,10 @@ def spp_solve(
                 A[i, 1] = -delta_pos[1] / geom_range
                 A[i, 2] = -delta_pos[2] / geom_range
                 A[i, 3] = 1.0  # Partial wrt receiver clock bias
+                # Map SV to OMC and geom_range
+                sv = sv_labels[i]
+                omc_dict[sv] = float(omc[i])
+                geom_ranges_dict[sv] = float(geom_range)
 
             try:
                 # Normal equation solution: delta_x = (A^T A)^-1 A^T omc
@@ -326,9 +339,38 @@ def spp_solve(
             current_pos += delta_x[:3]
             receiver_clock_offset_s = delta_x[3] / C  # Convert clock bias from meters to seconds
 
+            # Compute convergence metric
+            pos_update_norm = float(np.linalg.norm(delta_x[:3]))
+
+            # Compute error from RINEX header if available
+            error_rinex = None
+            if rinex_xyz is not None and len(rinex_xyz) == 3:
+                error_rinex = float(np.linalg.norm(current_pos - np.array(rinex_xyz)))
+
+            # Log all relevant metrics for this iteration, mapping SV-specific data by SV label
+            epoch_convergence.append({
+                "iteration": iter_idx,
+                "position_ecef": [float(current_pos[0]), float(current_pos[1]), float(current_pos[2])],
+                "receiver_clock_offset_ns": float(receiver_clock_offset_s * 1e9),
+                "delta_x": [float(x) for x in delta_x],
+                "pos_update_norm": pos_update_norm,
+                "omc": omc_dict,
+                "geom_ranges": geom_ranges_dict,
+                "error_from_rinex_header_m": error_rinex,
+                "converged": pos_update_norm < convergence_threshold,
+                "num_sats": int(num_sats)
+            })
+
             # Check for convergence in position
-            if np.linalg.norm(delta_x[:3]) < convergence_threshold:
+            if pos_update_norm < convergence_threshold:
                 break
+        # Store per-epoch convergence log
+        if len(epoch_convergence) > 0:
+            convergence_log.append({
+                "epoch": epoch_time.isoformat(),
+                "sv_labels": sv_labels,
+                "convergence": epoch_convergence
+            })
 
         if delta_x is not None:
             est_ecef = current_pos
@@ -349,4 +391,7 @@ def spp_solve(
     # Write results to JSON file
     with open(output_json, "w") as f:
         json.dump(results, f, indent=2)
+    # Write detailed convergence log to JSON file
+    with open(convergence_log_json, "w") as f:
+        json.dump(convergence_log, f, indent=2)
     return results
