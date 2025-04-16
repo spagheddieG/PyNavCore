@@ -1,23 +1,35 @@
-# spp_module.py
+# Single Point Positioning (SPP) Solver
 
 ## Overview
 
-`spp_module.py` is a modular Python implementation of a Single Point Positioning (SPP) solver for GNSS (Global Navigation Satellite System) data. It processes RINEX observation and navigation files to estimate the receiver's position and clock offset using broadcast ephemeris and pseudorange measurements. The module is designed for clarity, extensibility, and educational use, making it suitable for research, prototyping, and teaching GNSS fundamentals.
+This project implements a Single Point Positioning (SPP) solver for GNSS (Global Navigation Satellite System) data, with a focus on GPS processing. The implementation processes RINEX observation and navigation files to estimate receiver position and clock offset using broadcast ephemeris and pseudorange measurements.
 
 ## Features
 
-- Computes satellite ECEF positions and clock corrections from broadcast ephemeris (GPS ICD-200 compliant).
-- Parses receiver's approximate position from RINEX observation file headers.
-- Iteratively solves for receiver position and clock offset using least-squares adjustment.
-- Outputs results (epoch, position, clock offset, error from header, number of satellites) to a JSON file.
-- Well-commented and structured for easy understanding and modification.
+### Core Functionality
+- Processes RINEX observation and navigation files
+- Computes satellite ECEF positions and clock corrections using broadcast ephemeris
+- Implements iterative least-squares positioning algorithm
+- Handles Sagnac correction for Earth rotation effects
+- Supports multiple epochs processing with configurable limits
+- Provides detailed convergence logging and analysis
+- Outputs results in JSON format for further analysis
+
+### Implementation Details
+- Automatic initial position estimation from RINEX header
+- Fallback to default position (Dallas, TX) when header position unavailable
+- Configurable convergence criteria and iteration limits
+- Satellite selection based on valid pseudorange measurements
+- Comprehensive error checking and validation
+- Progress tracking with tqdm for long processing runs
 
 ## Dependencies
 
-- [georinex](https://github.com/geospace-code/georinex): For reading RINEX observation and navigation files.
-- [numpy](https://numpy.org/): Numerical operations.
-- [xarray](https://xarray.dev/): Array and dataset handling.
-- Standard Python libraries: `datetime`, `math`, `logging`, `json`, `typing`.
+- georinex: RINEX file parsing
+- numpy: Numerical operations and linear algebra
+- xarray: Multi-dimensional data handling
+- tqdm: Progress bar visualization
+- Standard Python libraries: datetime, math, logging, json, typing
 
 ## Usage
 
@@ -27,93 +39,83 @@ from spp_module import spp_solve
 results = spp_solve(
     obs_file="your_obs_file.##o",
     nav_file="your_nav_file.##n",
-    pseudorange_code="C1",           # or "C1C", "P1", etc. depending on your data
+    pseudorange_code="C1",           # or "C1C", "P1", etc. depending on data
     max_epochs=10,                   # process up to 10 epochs
     min_sats=4,                      # minimum satellites required
     convergence_threshold=1e-4,      # meters
     max_iterations=10,               # max iterations per epoch
     initial_xyz=None,                # use RINEX header or default if None
-    output_json="spp_results.json"   # output file
+    output_json="spp_results.json",  # main results output
+    convergence_log_json="spp_convergence_log.json"  # detailed convergence data
 )
 ```
 
-## Main Functions
+## Output Files
 
-- **calculate_satellite_position_and_clock**: Computes satellite ECEF position and clock correction for a given transmit time using broadcast ephemeris.
-- **parse_rinex_header_xyz**: Extracts the receiver's approximate ECEF position from the RINEX observation file header.
-- **spp_solve**: Main entry point. Loads RINEX files, iterates over epochs, selects valid satellites, computes satellite positions, and solves for receiver position and clock offset using least-squares.
+### spp_results.json
+Contains per-epoch results including:
+- Epoch timestamp (ISO8601 format)
+- ECEF position [X, Y, Z] in meters
+- Receiver clock offset in nanoseconds
+- Number of satellites used
+- Error from RINEX header position (if available)
 
-## Workflow
+### spp_convergence_log.json
+Detailed convergence information including:
+- Per-iteration position updates
+- Pseudorange residuals
+- Geometric ranges
+- Convergence metrics
+- Satellite-specific data
 
-1. Load RINEX observation and navigation files.
-2. For each epoch:
-   - Identify satellites with valid pseudorange measurements.
-   - For each satellite, select the latest valid ephemeris and compute its ECEF position and clock correction.
-   - Apply Sagnac correction for Earth's rotation.
-   - Formulate and solve the least-squares problem for receiver position and clock offset.
-   - Store results and compute error from RINEX header position (if available).
-3. Write results to a JSON file.
+## Development Status
 
-## Proposed Enhancements
+| Feature                                        | Status    |
+|-----------------------------------------------|-----------|
+| Core SPP Implementation                        | Complete  |
+| GPS Constellation Support                      | Complete  |
+| Progress Visualization                         | Complete  |
+| Convergence Analysis                          | Complete  |
+| Results Visualization                         | Complete  |
+| Multi-Constellation Support                   | Planned   |
+| Tropospheric/Ionospheric Corrections         | Planned   |
+| Outlier Detection                            | Planned   |
+| Real-Time Processing                         | Planned   |
 
-To increase the functionality and accuracy of this module, we are considering the following improvements:
+## Visualization Tools
 
-| Enhancement                                      | Status       |
-|--------------------------------------------------|--------------|
-| Multi-Constellation Support                      | Not Started  |
-| Advanced Error Modeling (iono/tropo, antenna PC) | Not Started  |
-| Robust Outlier Detection                         | Not Started  |
-| Improved Convergence and Initialization          | Not Started  |
-| Dilution of Precision (DOP) Calculation          | Not Started  |
-| Enhanced Output and Visualization                | Not Started  |
-| Real-Time/Streaming Capability                   | Not Started  |
-| Code Structure and Performance Improvements      | Not Started  |
-| Core SPP Functionality (GPS)                     | Complete     |
+The project includes a visualizer module that provides:
+- Position error plotting over time
+- Pseudorange residuals analysis
+- Satellite geometry visualization
+- Convergence metrics plotting
 
-### 1. Multi-Constellation Support
-- Extend support to other GNSS constellations (GLONASS, Galileo, BeiDou) by handling their navigation message formats and coordinate systems.
+## Future Enhancements
 
-### 2. Advanced Error Modeling
-- Implement tropospheric and ionospheric delay corrections using standard models (e.g., Klobuchar, Saastamoinen).
-- Add support for satellite and receiver antenna phase center corrections.
-- Incorporate multipath mitigation techniques.
+1. **Advanced Error Modeling**
+   - Tropospheric delay modeling
+   - Ionospheric corrections
+   - Antenna phase center variations
 
-### 3. Robust Outlier Detection
-- Add statistical tests (e.g., residual analysis, RANSAC) to detect and exclude outlier measurements or faulty satellites.
+2. **Robustness Improvements**
+   - RANSAC-based outlier detection
+   - Advanced initialization techniques
+   - Adaptive convergence thresholds
 
-### 4. Improved Convergence and Initialization
-- Use more sophisticated initial position estimation (e.g., weighted centroid of satellites).
-- Implement adaptive convergence thresholds and iteration limits based on data quality.
+3. **Performance Optimization**
+   - Vectorized operations
+   - Parallel processing support
+   - Memory optimization for large datasets
 
-### 5. Dilution of Precision (DOP) Calculation
-- Compute and report DOP values (GDOP, PDOP, HDOP, VDOP) for each epoch to assess solution quality.
-
-### 6. Enhanced Output and Visualization
-- Add support for outputting results in standard formats (CSV, KML, etc.).
-- Provide plotting utilities for position errors, satellite geometry, and residuals.
-
-### 7. Real-Time/Streaming Capability
-- Adapt the solver for real-time or near-real-time processing of GNSS data streams.
-
-### 8. Code Structure and Performance
-- Refactor for object-oriented design (e.g., a `SPPSolver` class).
-- Optimize performance for large datasets (e.g., vectorized operations, parallel processing).
-
-## GNSS Constellation Support
-
-| Constellation | Supported | Notes                        |
-|---------------|-----------|------------------------------|
-| GPS           | Yes       | Fully supported              |
-| GLONASS       | No        | Not Planned                  |
-| Galileo       | No        | Not Planned                  |
-| BeiDou        | No        | Not Planned                  |
+4. **Extended Output Formats**
+   - KML/KMZ for Google Earth
+   - RINEX output capability
+   - Standard geodetic formats
 
 ## References
 
-- GPS Interface Control Document ICD-GPS-200 (latest revision)
+- GPS Interface Control Document (ICD-GPS-200)
 - [georinex documentation](https://georinex.readthedocs.io/)
-- GNSS textbooks
+- GNSS textbooks and literature
 
----
-
-For questions or contributions, please open an issue or submit a pull request.
+For questions, bug reports, or contributions, please open an issue or submit a pull request.
