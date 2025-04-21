@@ -4,71 +4,73 @@ import numpy as np
 import os
 from tqdm import tqdm
 
-def load_convergence_log(json_path):
+def load_spp_results(json_path):
+    """Loads SPP results from a JSON file."""
     with open(json_path, "r") as f:
         return json.load(f)
 
-def plot_error_and_residuals_over_time(convergence_log):
-    # X-axis: epoch index (time)
+def plot_final_error_and_residuals(spp_results):
+    """Plots final position error and pseudorange residuals from SPP results."""
     epoch_indices = []
     errors = []
     residuals = []  # List of (epoch_idx, sv_label, value)
 
-    for epoch_idx, epoch_data in tqdm(list(enumerate(convergence_log)), desc="Processing epochs"):
-        convergence = epoch_data["convergence"]
-        if not convergence:
-            continue
-        # Use the last iteration's error for this epoch
-        last = convergence[-1]
-        error = last.get("error_from_rinex_header_m", None)
+    # data from spp_results
+    for epoch_idx, epoch_data in enumerate(spp_results):
+        error = epoch_data.get("error_from_rinex_header_m", None)
         errors.append(error)
         epoch_indices.append(epoch_idx)
-        # Handle both dict and list for pseudorange residuals
-        omc = last.get("omc", {})
-        if isinstance(omc, dict):
-            for sv, value in omc.items():
-                residuals.append((epoch_idx, sv, value))
-        elif isinstance(omc, list):
-            # Try to get SV labels if present
-            sv_labels = epoch_data.get("sv_labels", [f"SV {i+1}" for i in range(len(omc))])
-            for i, value in enumerate(omc):
-                residuals.append((epoch_idx, sv_labels[i], value))
+        
+        residuals_m = epoch_data.get("residuals_m", {})
+        for sv_label, value in residuals_m.items():
+            residuals.append((epoch_idx, sv_label, value))
 
-    # Prepare data for plotting
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
 
-    # Plot error over time
-    ax1.plot(epoch_indices, errors, marker='o', color='tab:red')
-    ax1.set_ylabel("Position Error (meters)")
-    ax1.set_title("Position Error Over Time (Epoch Index)")
-    min_idx = int(np.nanargmin([e if e is not None else np.nan for e in errors]))
-    ax1.annotate("Min Error", (epoch_indices[min_idx], errors[min_idx]), textcoords="offset points", xytext=(0,10), ha='center', color='blue', fontsize=9)
+    valid_errors = [(idx, err) for idx, err in zip(epoch_indices, errors) if err is not None]
+    if valid_errors:
+        valid_indices, valid_error_values = zip(*valid_errors)
+        ax1.plot(valid_indices, valid_error_values, marker='o', color='tab:red', linestyle='-')
+        min_idx_local = np.argmin(valid_error_values)
+        min_epoch_idx = valid_indices[min_idx_local]
+        min_error_val = valid_error_values[min_idx_local]
+        ax1.annotate(f"Min Error: {min_error_val:.2f}m", (min_epoch_idx, min_error_val), 
+                     textcoords="offset points", xytext=(0,10), ha='center', color='blue', fontsize=9)
+    ax1.set_ylabel("Position Error from RINEX Header (m)")
+    ax1.set_title("Final Position Error Over Time (Epoch Index)")
+    ax1.grid(True)
 
-    # Plot pseudorange residuals over time (scatter, colored by SV)
-    sv_set = sorted(set(sv for _, sv, _ in residuals))
-    colors = plt.cm.get_cmap('tab20', len(sv_set))
-    for i, sv in enumerate(tqdm(sv_set, desc="Plotting satellites", leave=False)):
-        x = [epoch_idx for epoch_idx, sv_label, _ in residuals if sv_label == sv]
-        y = [value for epoch_idx, sv_label, value in residuals if sv_label == sv]
-        ax2.scatter(x, y, label=str(sv), color=colors(i), s=20)
-    ax2.set_ylabel("Pseudorange Residual (meters)")
+    # Plot pseudorange residuals
+    if residuals:
+        sv_set = sorted(set(sv for _, sv, _ in residuals))
+        
+        colors = plt.cm.get_cmap('turbo', len(sv_set)) if len(sv_set) > 20 else plt.cm.get_cmap('tab20', len(sv_set))
+        for i, sv in enumerate(sv_set):
+            x = [epoch_idx for epoch_idx, sv_label, _ in residuals if sv_label == sv]
+            y = [value for epoch_idx, sv_label, value in residuals if sv_label == sv]
+            ax2.plot(x, y, label=str(sv), color=colors(i),alpha=0.7)
+        ax2.legend(title="SV", bbox_to_anchor=(1, 1))
+    ax2.set_ylabel("Final Pseudorange Residual (m)")
     ax2.set_xlabel("Epoch Index")
-    ax2.set_title("Pseudorange Residuals Over Time (All Satellites)")
-    ax2.legend(title="SV", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+    ax2.set_title("Final Pseudorange Residuals Over Time (All Satellites)")
+    ax2.grid(True)
 
-    plt.tight_layout()
     plt.show()
 
 def main():
-    json_path = "spp_convergence_log.json"
+    json_path = "spp_results.json"
     if not os.path.exists(json_path):
-        print(f"Convergence log file '{json_path}' not found.")
+        print(f"SPP results file '{json_path}' not found.")
         return
 
-    convergence_log = load_convergence_log(json_path)
-    print(f"Loaded {len(convergence_log)} epochs from {json_path}.")
+    spp_results = load_spp_results(json_path)
+    if not spp_results:
+        print(f"No data found in {json_path}.")
+        return
+        
+    print(f"Loaded {len(spp_results)} epochs from {json_path}.")
 
-    plot_error_and_residuals_over_time(convergence_log)
+    plot_final_error_and_residuals(spp_results)
 
 if __name__ == "__main__":
     main()

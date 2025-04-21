@@ -12,7 +12,6 @@ Dependencies:
 - numpy, xarray: For numerical and array operations.
 - Standard Python libraries: datetime, math, logging, json, typing.
 
-Author: Eddie G
 """
 
 import georinex as gr
@@ -124,7 +123,7 @@ def calculate_satellite_position_and_clock(ephem, transmit_time_gps_week, transm
         Zk = yk_prime * sin_ik
         sat_pos_ecef = np.array([Xk, Yk, Zk])
 
-        # Relativistic correction (meters to seconds)
+        # Relativistic correction (converted from meters)
         relativistic_corr = -2 * math.sqrt(GM * a) * e * sin_Ek / C**2
         # Total satellite clock correction (seconds)
         sat_clock_corr = sat_clock_bias + relativistic_corr - ephem['TGD'].item()
@@ -163,8 +162,7 @@ def spp_solve(
     convergence_threshold: float = 1e-4,
     max_iterations: int = 10,
     initial_xyz: Optional[List[float]] = None,
-    output_json: str = "spp_results.json",
-    convergence_log_json: str = "spp_convergence_log.json"
+    output_json: str = "spp_results.json"
 ) -> List[Dict[str, Any]]:
     """
     Modular SPP (Single Point Positioning) solver.
@@ -193,11 +191,11 @@ def spp_solve(
             - "receiver_clock_offset_ns": receiver clock offset in nanoseconds
             - "num_sats": number of satellites used
             - "error_from_rinex_header_m": error from RINEX header position (meters), if available
+            - "residuals_m": dictionary mapping satellite ID (str) to pseudorange residual (meters)
     """
     # Set up logging for info messages
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    from tqdm import tqdm
     # Load RINEX observation and navigation files (GPS only for obs)
     obs = gr.load(obs_file, use='G')
     nav = gr.load(nav_file)
@@ -220,12 +218,11 @@ def spp_solve(
         initial_xyz = [-1288392.5, -4865182.1, 3999769.7]
 
     results = []
-    convergence_log = []
     processed_epochs = 0
     # Get unique epoch times from observation file
     unique_times = np.unique(obs['time'].values)
 
-    for epoch_time_dt64 in tqdm(unique_times, desc="Epochs"):
+    for epoch_time_dt64 in unique_times:
         # Limit number of processed epochs if max_epochs is set
         if max_epochs is not None and processed_epochs >= max_epochs:
             break
@@ -270,9 +267,7 @@ def spp_solve(
             if available_ephem.time.size == 0:
                 continue  # No ephemeris available
             ephem = available_ephem.isel(time=-1)
-            # Approximate distance from initial position (not used in calculation, but could be for selection)
-            approx_dist = np.linalg.norm(initial_xyz)
-            # Estimate transmit time (seconds of week) by correcting for signal travel time
+            # Estimate transmit time by correcting reception time for signal travel time
             transmit_time_sow = time_of_week - pr / C
             # Compute satellite ECEF position and clock correction
             sat_pos, sat_clk = calculate_satellite_position_and_clock(ephem, gps_week, transmit_time_sow)
@@ -291,27 +286,20 @@ def spp_solve(
             continue  # Not enough satellites for a solution
 
         num_sats = len(sat_positions)
-        # Initialize state vector: [X, Y, Z, clock bias]
-        x = np.zeros(4)
+        # Removed unused state vector initialization 'x'
         current_pos = np.array(initial_xyz)
         delta_x = None
 
         # Iterative least-squares solution for receiver position and clock offset
-        epoch_convergence = []
-        sv_labels = [str(sv) for sv in valid_svs]
-        for iter_idx in tqdm(range(max_iterations), desc=f"Iterations (Epoch {processed_epochs+1})", leave=False):
+        for iter_idx in range(max_iterations):
             A = np.zeros((num_sats, 4))  # Design matrix
             omc = np.zeros(num_sats)     # Observed minus computed pseudoranges
-            geom_ranges = []
-            omc_dict = {}
-            geom_ranges_dict = {}
             for i in range(num_sats):
                 sat_pos_i = sat_positions[i]
                 pr_i = pseudoranges[i]
                 sat_clk_corr_i = sat_clock_corrections[i]
                 delta_pos = sat_pos_i - current_pos
                 geom_range = np.linalg.norm(delta_pos)
-                geom_ranges.append(geom_range)
                 # Correct pseudorange for satellite clock error
                 pr_corrected = pr_i + C * sat_clk_corr_i
                 omc[i] = pr_corrected - geom_range
@@ -320,10 +308,6 @@ def spp_solve(
                 A[i, 1] = -delta_pos[1] / geom_range
                 A[i, 2] = -delta_pos[2] / geom_range
                 A[i, 3] = 1.0  # Partial wrt receiver clock bias
-                # Map SV to OMC and geom_range
-                sv = sv_labels[i]
-                omc_dict[sv] = float(omc[i])
-                geom_ranges_dict[sv] = float(geom_range)
 
             try:
                 # Normal equation solution: delta_x = (A^T A)^-1 A^T omc
@@ -342,56 +326,48 @@ def spp_solve(
             # Compute convergence metric
             pos_update_norm = float(np.linalg.norm(delta_x[:3]))
 
-            # Compute error from RINEX header if available
-            error_rinex = None
-            if rinex_xyz is not None and len(rinex_xyz) == 3:
-                error_rinex = float(np.linalg.norm(current_pos - np.array(rinex_xyz)))
-
-            # Log all relevant metrics for this iteration, mapping SV-specific data by SV label
-            epoch_convergence.append({
-                "iteration": iter_idx,
-                "position_ecef": [float(current_pos[0]), float(current_pos[1]), float(current_pos[2])],
-                "receiver_clock_offset_ns": float(receiver_clock_offset_s * 1e9),
-                "delta_x": [float(x) for x in delta_x],
-                "pos_update_norm": pos_update_norm,
-                "omc": omc_dict,
-                "geom_ranges": geom_ranges_dict,
-                "error_from_rinex_header_m": error_rinex,
-                "converged": pos_update_norm < convergence_threshold,
-                "num_sats": int(num_sats)
-            })
-
             # Check for convergence in position
             if pos_update_norm < convergence_threshold:
                 break
-        # Store per-epoch convergence log
-        if len(epoch_convergence) > 0:
-            convergence_log.append({
-                "epoch": epoch_time.isoformat(),
-                "sv_labels": sv_labels,
-                "convergence": epoch_convergence
-            })
+        # --- Iteration loop finished --- 
 
         if delta_x is not None:
+            
             est_ecef = current_pos
+            
+            # --- Calculate final residuals --- 
+            final_omc = np.zeros(num_sats)
+            sv_labels = [str(sv) for sv in valid_svs] # Ensure we have SV labels
+            
+            for i in range(num_sats):
+                sat_pos_i = sat_positions[i]
+                pr_i = pseudoranges[i]
+                sat_clk_corr_i = sat_clock_corrections[i]
+                delta_pos = sat_pos_i - est_ecef
+                geom_range = np.linalg.norm(delta_pos)
+                pr_corrected = pr_i + C * sat_clk_corr_i
+                final_omc[i] = pr_corrected - geom_range
+            
+            # Map residuals to SV labels
+            residuals_dict = {sv_labels[i]: float(final_omc[i]) for i in range(num_sats)}
+            
+            # Calculate error from RINEX header
             error_rinex = None
             if rinex_xyz is not None and len(rinex_xyz) == 3:
-                # Compute error from RINEX header position (meters)
                 error_rinex = float(np.linalg.norm(est_ecef - np.array(rinex_xyz)))
-            # Store results for this epoch
+            
+            # Store results
             results.append({
                 "epoch": epoch_time.isoformat(),
                 "position_ecef": [float(est_ecef[0]), float(est_ecef[1]), float(est_ecef[2])],
                 "receiver_clock_offset_ns": float(receiver_clock_offset_s * 1e9),
                 "num_sats": int(num_sats),
-                "error_from_rinex_header_m": error_rinex
+                "error_from_rinex_header_m": error_rinex,
+                "residuals_m": residuals_dict
             })
-        processed_epochs += 1
+            processed_epochs += 1
 
     # Write results to JSON file
     with open(output_json, "w") as f:
         json.dump(results, f, indent=2)
-    # Write detailed convergence log to JSON file
-    with open(convergence_log_json, "w") as f:
-        json.dump(convergence_log, f, indent=2)
     return results
