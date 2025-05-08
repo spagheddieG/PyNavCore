@@ -30,7 +30,7 @@ def plot_final_error_and_residuals(spp_results):
     valid_errors = [(idx, err) for idx, err in zip(epoch_indices, errors) if err is not None]
     if valid_errors:
         valid_indices, valid_error_values = zip(*valid_errors)
-        ax1.plot(valid_indices, valid_error_values, marker='o', color='tab:red', linestyle='-')
+        ax1.plot(valid_indices, valid_error_values, color='tab:red', linestyle='-')
         min_idx_local = np.argmin(valid_error_values)
         min_epoch_idx = valid_indices[min_idx_local]
         min_error_val = valid_error_values[min_idx_local]
@@ -48,11 +48,11 @@ def plot_final_error_and_residuals(spp_results):
         for i, sv in enumerate(sv_set):
             x = [epoch_idx for epoch_idx, sv_label, _ in residuals if sv_label == sv]
             y = [value for epoch_idx, sv_label, value in residuals if sv_label == sv]
-            ax2.plot(x, y, label=str(sv), color=colors(i),alpha=0.7)
+            ax2.scatter(x, y, label=str(sv), color=colors(i), s=15, alpha=0.7)
         ax2.legend(title="SV", bbox_to_anchor=(1, 1))
-    ax2.set_ylabel("Final Pseudorange Residual (m)")
+    ax2.set_ylabel("Pseudorange Residual (m)")
     ax2.set_xlabel("Epoch Index")
-    ax2.set_title("Final Pseudorange Residuals Over Time (All Satellites)")
+    ax2.set_title("Pseudorange Residuals Over Time (All Satellites)")
     ax2.grid(True)
 
     plt.show()
