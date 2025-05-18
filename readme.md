@@ -116,6 +116,4 @@ The project includes a visualizer module that provides:
 
 - GPS Interface Control Document (ICD-GPS-200)
 - [georinex documentation](https://georinex.readthedocs.io/)
-- GNSS textbooks and literature
 
-For questions, bug reports, or contributions, please open an issue or submit a pull request.
