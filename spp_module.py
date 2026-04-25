@@ -21,12 +21,133 @@ from datetime import datetime
 import math
 import logging
 import json
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 # --- Constants ---
 C = 299792458.0  # Speed of light in vacuum (meters per second)
 GM = 3.986005e14  # WGS84 gravitational constant (m^3/s^2)
 OMEGA_E_DOT = 7.2921151467e-5  # WGS84 Earth rotation rate (radians per second)
+WGS84_A = 6378137.0
+WGS84_F = 1 / 298.257223563
+WGS84_E2 = WGS84_F * (2 - WGS84_F)
+
+def ecef_to_geodetic(xyz: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Convert ECEF XYZ coordinates to WGS84 geodetic latitude, longitude, and height.
+
+    Returns:
+        Tuple of latitude (rad), longitude (rad), and ellipsoidal height (m).
+    """
+    x, y, z = xyz
+    lon = math.atan2(y, x)
+    p = math.hypot(x, y)
+    lat = math.atan2(z, p * (1 - WGS84_E2))
+
+    for _ in range(10):
+        sin_lat = math.sin(lat)
+        n = WGS84_A / math.sqrt(1 - WGS84_E2 * sin_lat**2)
+        height = p / math.cos(lat) - n
+        next_lat = math.atan2(z, p * (1 - WGS84_E2 * n / (n + height)))
+        if abs(next_lat - lat) < 1e-12:
+            lat = next_lat
+            break
+        lat = next_lat
+
+    sin_lat = math.sin(lat)
+    n = WGS84_A / math.sqrt(1 - WGS84_E2 * sin_lat**2)
+    height = p / math.cos(lat) - n
+    return lat, lon, height
+
+def elevation_azimuth(receiver_xyz: np.ndarray, sat_xyz: np.ndarray) -> Tuple[float, float]:
+    """
+    Calculate satellite elevation and azimuth from receiver and satellite ECEF positions.
+
+    Returns:
+        Tuple of elevation (rad) and azimuth (rad).
+    """
+    lat, lon, _ = ecef_to_geodetic(receiver_xyz)
+    dx = sat_xyz - receiver_xyz
+
+    sin_lat = math.sin(lat)
+    cos_lat = math.cos(lat)
+    sin_lon = math.sin(lon)
+    cos_lon = math.cos(lon)
+
+    east = -sin_lon * dx[0] + cos_lon * dx[1]
+    north = -sin_lat * cos_lon * dx[0] - sin_lat * sin_lon * dx[1] + cos_lat * dx[2]
+    up = cos_lat * cos_lon * dx[0] + cos_lat * sin_lon * dx[1] + sin_lat * dx[2]
+
+    horizontal = math.hypot(east, north)
+    elevation = math.atan2(up, horizontal)
+    azimuth = math.atan2(east, north)
+    if azimuth < 0:
+        azimuth += 2 * math.pi
+    return elevation, azimuth
+
+def klobuchar_ionosphere_delay(
+    receiver_xyz: np.ndarray,
+    sat_xyz: np.ndarray,
+    gps_sow: float,
+    iono_coeffs: Optional[np.ndarray]
+) -> float:
+    """
+    Calculate GPS L1 ionospheric group delay using the Klobuchar broadcast model.
+
+    Returns:
+        Delay in meters. Returns 0.0 when coefficients are unavailable.
+    """
+    if iono_coeffs is None or len(iono_coeffs) < 8:
+        return 0.0
+
+    alpha = np.asarray(iono_coeffs[:4], dtype=float)
+    beta = np.asarray(iono_coeffs[4:8], dtype=float)
+    lat, lon, _ = ecef_to_geodetic(receiver_xyz)
+    elevation, azimuth = elevation_azimuth(receiver_xyz, sat_xyz)
+    elevation_sc = max(elevation / math.pi, 0.0)
+    lat_sc = lat / math.pi
+    lon_sc = lon / math.pi
+    azimuth_rad = azimuth
+
+    psi = 0.0137 / (elevation_sc + 0.11) - 0.022
+    phi_i = lat_sc + psi * math.cos(azimuth_rad)
+    phi_i = min(max(phi_i, -0.416), 0.416)
+    lam_i = lon_sc + psi * math.sin(azimuth_rad) / math.cos(phi_i * math.pi)
+    phi_m = phi_i + 0.064 * math.cos((lam_i - 1.617) * math.pi)
+
+    local_time = (43200.0 * lam_i + gps_sow) % 86400.0
+    amplitude = float(np.polyval(alpha[::-1], phi_m))
+    period = float(np.polyval(beta[::-1], phi_m))
+    amplitude = max(amplitude, 0.0)
+    period = max(period, 72000.0)
+
+    x = 2 * math.pi * (local_time - 50400.0) / period
+    obliquity = 1.0 + 16.0 * (0.53 - elevation_sc)**3
+    if abs(x) < 1.57:
+        delay_s = obliquity * (5e-9 + amplitude * (1 - x**2 / 2 + x**4 / 24))
+    else:
+        delay_s = obliquity * 5e-9
+    return C * delay_s
+
+def saastamoinen_troposphere_delay(receiver_xyz: np.ndarray, sat_xyz: np.ndarray) -> float:
+    """
+    Estimate neutral-atmosphere delay with a simple Saastamoinen-style standard model.
+
+    Returns:
+        Delay in meters.
+    """
+    elevation, _ = elevation_azimuth(receiver_xyz, sat_xyz)
+    sin_el = math.sin(max(elevation, math.radians(5.0)))
+    _, _, height = ecef_to_geodetic(receiver_xyz)
+    height = max(min(height, 10000.0), 0.0)
+
+    pressure = 1013.25 * (1 - 2.2557e-5 * height) ** 5.2568
+    temperature = 288.15 - 0.0065 * height
+    water_vapor_pressure = 6.108 * 0.5 * math.exp((17.15 * (temperature - 273.15)) / (234.7 + (temperature - 273.15)))
+    zenith_angle = math.pi / 2 - max(elevation, math.radians(5.0))
+
+    return 0.002277 / sin_el * (
+        pressure + (1255.0 / temperature + 0.05) * water_vapor_pressure - math.tan(zenith_angle) ** 2
+    )
 
 def calculate_satellite_position_and_clock(ephem, transmit_time_gps_week, transmit_time_sow):
     """
@@ -199,11 +320,16 @@ def spp_solve(
     # Load RINEX observation and navigation files (GPS only for obs)
     obs = gr.load(obs_file, use='G')
     nav = gr.load(nav_file)
+    if pseudorange_code not in obs.data_vars:
+        available = ", ".join(str(name) for name in obs.data_vars)
+        raise ValueError(f"pseudorange code '{pseudorange_code}' not found in observation file. Available: {available}")
 
     # Get receiver's approximate position from RINEX header, if available
     rinex_xyz = None
     try:
-        rinex_xyz = obs.attrs['position_xyz']
+        rinex_xyz = obs.attrs.get('position_xyz')
+        if rinex_xyz is None:
+            rinex_xyz = obs.attrs.get('position')
         if isinstance(rinex_xyz, np.ndarray):
             rinex_xyz = rinex_xyz.tolist()
         elif isinstance(rinex_xyz, (xr.DataArray, xr.Variable)):
@@ -213,9 +339,14 @@ def spp_solve(
     if rinex_xyz is None:
         rinex_xyz = parse_rinex_header_xyz(obs_file)
 
-    # Use Dallas, TX as default initial position if not provided
+    iono_coeffs = nav.attrs.get('ionospheric_corr_GPS')
+
+    # Prefer the RINEX approximate position; fall back to Dallas, TX if unavailable.
     if initial_xyz is None:
-        initial_xyz = [-1288392.5, -4865182.1, 3999769.7]
+        if rinex_xyz is not None and len(rinex_xyz) == 3:
+            initial_xyz = rinex_xyz
+        else:
+            initial_xyz = [-1288392.5, -4865182.1, 3999769.7]
 
     results = []
     processed_epochs = 0
@@ -241,6 +372,7 @@ def spp_solve(
         sat_positions = []
         sat_clock_corrections = []
         pseudoranges = []
+        used_svs = []
 
         # Compute GPS week and seconds of week for this epoch
         GPS_EPOCH = datetime(1980, 1, 6, 0, 0, 0)
@@ -281,6 +413,7 @@ def spp_solve(
                 sat_positions.append(sat_pos_corrected)
                 sat_clock_corrections.append(sat_clk)
                 pseudoranges.append(pr)
+                used_svs.append(sv)
 
         if len(sat_positions) < min_sats:
             continue  # Not enough satellites for a solution
@@ -289,6 +422,7 @@ def spp_solve(
         # Removed unused state vector initialization 'x'
         current_pos = np.array(initial_xyz)
         delta_x = None
+        receiver_clock_bias_m = 0.0
 
         # Iterative least-squares solution for receiver position and clock offset
         for iter_idx in range(max_iterations):
@@ -300,8 +434,10 @@ def spp_solve(
                 sat_clk_corr_i = sat_clock_corrections[i]
                 delta_pos = sat_pos_i - current_pos
                 geom_range = np.linalg.norm(delta_pos)
-                # Correct pseudorange for satellite clock error
-                pr_corrected = pr_i + C * sat_clk_corr_i
+                iono_delay = klobuchar_ionosphere_delay(current_pos, sat_pos_i, time_of_week, iono_coeffs)
+                tropo_delay = saastamoinen_troposphere_delay(current_pos, sat_pos_i)
+                # Correct pseudorange for satellite clock, ionosphere, and troposphere.
+                pr_corrected = pr_i + C * sat_clk_corr_i - iono_delay - tropo_delay
                 omc[i] = pr_corrected - geom_range
                 # Partial derivatives for design matrix
                 A[i, 0] = -delta_pos[0] / geom_range
@@ -321,7 +457,8 @@ def spp_solve(
 
             # Update receiver position and clock bias
             current_pos += delta_x[:3]
-            receiver_clock_offset_s = delta_x[3] / C  # Convert clock bias from meters to seconds
+            receiver_clock_bias_m = float(delta_x[3])
+            receiver_clock_offset_s = receiver_clock_bias_m / C  # Convert clock bias from meters to seconds
 
             # Compute convergence metric
             pos_update_norm = float(np.linalg.norm(delta_x[:3]))
@@ -337,7 +474,7 @@ def spp_solve(
             
             # --- Calculate final residuals --- 
             final_omc = np.zeros(num_sats)
-            sv_labels = [str(sv) for sv in valid_svs] # Ensure we have SV labels
+            sv_labels = [str(sv) for sv in used_svs] # Ensure labels match satellites actually used
             
             for i in range(num_sats):
                 sat_pos_i = sat_positions[i]
@@ -345,8 +482,10 @@ def spp_solve(
                 sat_clk_corr_i = sat_clock_corrections[i]
                 delta_pos = sat_pos_i - est_ecef
                 geom_range = np.linalg.norm(delta_pos)
-                pr_corrected = pr_i + C * sat_clk_corr_i
-                final_omc[i] = pr_corrected - geom_range
+                iono_delay = klobuchar_ionosphere_delay(est_ecef, sat_pos_i, time_of_week, iono_coeffs)
+                tropo_delay = saastamoinen_troposphere_delay(est_ecef, sat_pos_i)
+                pr_corrected = pr_i + C * sat_clk_corr_i - iono_delay - tropo_delay
+                final_omc[i] = pr_corrected - geom_range - receiver_clock_bias_m
             
             # Map residuals to SV labels
             residuals_dict = {sv_labels[i]: float(final_omc[i]) for i in range(num_sats)}

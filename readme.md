@@ -11,8 +11,9 @@ This project implements a Single Point Positioning (SPP) solver for GNSS (Global
 - Computes satellite ECEF positions and clock corrections using broadcast ephemeris
 - Implements iterative least-squares positioning algorithm
 - Handles Sagnac correction for Earth rotation effects
+- Applies GPS Klobuchar ionospheric correction from the navigation file
+- Applies a standard tropospheric delay correction
 - Supports multiple epochs processing with configurable limits
-- Provides detailed convergence logging and analysis
 - Outputs results in JSON format for further analysis
 
 ### Implementation Details
@@ -21,17 +22,23 @@ This project implements a Single Point Positioning (SPP) solver for GNSS (Global
 - Configurable convergence criteria and iteration limits
 - Satellite selection based on valid pseudorange measurements
 - Comprehensive error checking and validation
-- Progress tracking with tqdm for long processing runs
 
 ## Dependencies
 
 - georinex: RINEX file parsing
 - numpy: Numerical operations and linear algebra
 - xarray: Multi-dimensional data handling
-- tqdm: Progress bar visualization
 - Standard Python libraries: datetime, math, logging, json, typing
 
 ## Usage
+
+Command line:
+
+```bash
+python main.py your_obs_file.##o your_nav_file.##n --pseudorange-code C1 --output-json spp_results.json
+```
+
+Python:
 
 ```python
 from spp_module import spp_solve
@@ -45,8 +52,7 @@ results = spp_solve(
     convergence_threshold=1e-4,      # meters
     max_iterations=10,               # max iterations per epoch
     initial_xyz=None,                # use RINEX header or default if None
-    output_json="spp_results.json",  # main results output
-    convergence_log_json="spp_convergence_log.json"  # detailed convergence data
+    output_json="spp_results.json"   # main results output
 )
 ```
 
@@ -59,14 +65,7 @@ Contains per-epoch results including:
 - Receiver clock offset in nanoseconds
 - Number of satellites used
 - Error from RINEX header position (if available)
-
-### spp_convergence_log.json
-Detailed convergence information including:
-- Per-iteration position updates
-- Pseudorange residuals
-- Geometric ranges
-- Convergence metrics
-- Satellite-specific data
+- Pseudorange residuals by satellite
 
 ## Development Status
 
@@ -74,11 +73,9 @@ Detailed convergence information including:
 |-----------------------------------------------|-----------|
 | Core SPP Implementation                        | Complete  |
 | GPS Constellation Support                      | Complete  |
-| Progress Visualization                         | Complete  |
-| Convergence Analysis                          | Complete  |
 | Results Visualization                         | Complete  |
+| Ionospheric/Tropospheric Corrections         | Basic     |
 | Multi-Constellation Support                   | Planned   |
-| Tropospheric/Ionospheric Corrections         | Planned   |
 | Outlier Detection                            | Planned   |
 | Real-Time Processing                         | Planned   |
 
@@ -93,8 +90,8 @@ The project includes a visualizer module that provides:
 ## Future Enhancements
 
 1. **Advanced Error Modeling**
-   - Tropospheric delay modeling
-   - Ionospheric corrections
+   - Higher-fidelity tropospheric modeling
+   - Dual-frequency ionosphere-free combinations
    - Antenna phase center variations
 
 2. **Robustness Improvements**
@@ -116,4 +113,3 @@ The project includes a visualizer module that provides:
 
 - GPS Interface Control Document (ICD-GPS-200)
 - [georinex documentation](https://georinex.readthedocs.io/)
-
